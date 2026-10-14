@@ -2,11 +2,13 @@
 # In Render: New > Blueprint > connect your repo containing this file.
 services:
   - type: web
-    name: genius-ai-studio
+    name: linguaflow-ai
     runtime: node
     plan: free
-    buildCommand: npm install && npm run build
+    branch: main
+    buildCommand: npm ci && npm run build
     startCommand: npm start
+    autoDeployTrigger: checksPass
     healthCheckPath: /
     envVars:
       - key: NODE_ENV
