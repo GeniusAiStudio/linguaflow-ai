@@ -1,0 +1,10 @@
+{
+  "name": "Remix: Copy of Genius AI",
+  "description": "A high-performance real-time translation and transcription hub powered by Gemini. Supports live speech-to-text, multi-language translation, and high-fidelity text-to-speech.",
+  "requestFramePermissions": [
+    "microphone"
+  ],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}

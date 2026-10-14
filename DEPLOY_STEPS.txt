@@ -1,0 +1,35 @@
+DEPLOY STEPS (Render or Railway)
+================================
+
+0) FIRST: create a NEW Gemini API key
+   - Go to Google AI Studio (aistudio.google.com) > API keys > Create
+   - Restrict it: API restrictions > "Generative Language API" only
+   - Disable/delete the OLD exposed key
+   - Copy the new key (you will paste it in step 2)
+
+1) Push this folder to GitHub
+   - Create a new repo on github.com (e.g. "genius-ai-studio")
+   - In this folder:
+       git remote add origin https://github.com/<you>/genius-ai-studio.git
+       git branch -M main
+       git push -u origin main
+
+2) RENDER (recommended to try first — free)
+   - render.com > New > Blueprint > connect the repo (uses render.yaml)
+   - When prompted, paste GEMINI_API_KEY (the NEW key) as the env var
+   - Deploy. Free plan sleeps after inactivity (~30-50s cold start).
+
+   RAILWAY (alternative — always-on, ~$5/mo Hobby)
+   - railway.app > New Project > Deploy from GitHub repo
+   - Variables tab > add GEMINI_API_KEY = new key
+   - Railway auto-detects: build `npm install && npm run build`, start `npm start`
+
+3) Verify: open the deployed URL, generate a script. The browser never
+   sees the API key anymore — all Gemini calls go through your server.
+
+Notes:
+- No database setup needed: the app uses Firebase/Firestore (already configured).
+- ffmpeg/yt-dlp binaries download automatically at runtime (needs internet,
+  which both hosts provide).
+- Firebase web key in firebase-applet-config.json is public-by-design; restrict
+  it in Google Cloud Console (Credentials > API restrictions + HTTP referrers).

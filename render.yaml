@@ -1,0 +1,18 @@
+# Render Blueprint — deploys GeniusAiStudio as a single Node web service.
+# In Render: New > Blueprint > connect your repo containing this file.
+services:
+  - type: web
+    name: genius-ai-studio
+    runtime: node
+    plan: free
+    buildCommand: npm install && npm run build
+    startCommand: npm start
+    healthCheckPath: /
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: GEMINI_API_KEY
+        sync: false
+      # Optional fallback key (leave empty if unused):
+      # - key: MY_GEMINI_API_KEY
+      #   sync: false
