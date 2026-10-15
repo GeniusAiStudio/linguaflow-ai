@@ -1946,44 +1946,35 @@ Please write the script in beautiful, fluid, natural ${languageName} specificall
         .trim();
       if (!cleanChunk) continue;
 
-      if (
-        primaryVoice.startsWith("my-MM-") ||
-        primaryVoice.startsWith("en-US-") ||
-        primaryVoice.includes("-")
-      ) {
-        try {
-          const response = await fetch("/api/edge-tts", {
-            method: "POST",
-            headers: {
-              "Content-Type": "application/json",
-            },
-            body: JSON.stringify({
-              voice: primaryVoice,
-              text: cleanChunk,
-            }),
-          });
-          if (!response.ok) {
-            throw new Error(`Edge TTS API returned status ${response.status}`);
-          }
-          const arrayBuffer = await response.arrayBuffer();
-          const audioBuffer = await ctx.decodeAudioData(arrayBuffer);
-          buffers.push(audioBuffer);
-        } catch (err: any) {
-          console.error(
-            "Local Edge TTS synthesize error, falling back to Gemini:",
-            err.message,
+      if (/^[a-z]{2,3}-[A-Z]{2}-.+Neural$/.test(primaryVoice)) {
+        const response = await fetch("/api/edge-tts", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            voice: primaryVoice,
+            text: cleanChunk,
+          }),
+        });
+        if (!response.ok) {
+          const errorBody = await response.json().catch(() => ({})) as { error?: string };
+          throw new Error(
+            errorBody.error || `Microsoft Speech API returned status ${response.status}`,
           );
-          // Fallback to Gemini standard voice if Edge TTS API fails
-          const primaryLower = (primaryVoice || "").toLowerCase();
-          const isFemale = primaryLower.includes("nilar") || primaryLower.includes("female") || primaryLower.includes("girl") || primaryLower.includes("woman") || primaryLower.includes("jenny") || primaryLower.includes("emma") || primaryLower.includes("sophia") || primaryLower.includes("ana");
-          const fallbackVoice = isFemale ? "Kore" : "Puck";
-          const geminiBuffer = await this.generateSpeechWithGemini(
-            cleanChunk,
-            fallbackVoice,
-            ctx,
-          );
-          buffers.push(geminiBuffer);
         }
+
+        const provider = response.headers.get("X-TTS-Provider");
+        const generatedVoice = response.headers.get("X-TTS-Voice");
+        if (provider !== "Microsoft-Azure-Speech" || generatedVoice !== primaryVoice) {
+          throw new Error(
+            `Microsoft voice verification failed for ${primaryVoice}; no substitute voice was used.`,
+          );
+        }
+
+        const arrayBuffer = await response.arrayBuffer();
+        const audioBuffer = await ctx.decodeAudioData(arrayBuffer);
+        buffers.push(audioBuffer);
       } else {
         const geminiBuffer = await this.generateSpeechWithGemini(
           cleanChunk,

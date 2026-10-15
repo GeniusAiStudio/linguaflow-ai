@@ -39,13 +39,13 @@ const MALE_VOICES: AICharacter[] = [
   { id: 'Charon', name: 'Charon', gender: 'MALE', desc: 'Deep & Resonant (Neural)' },
   { id: 'Fenrir', name: 'Fenrir', gender: 'MALE', desc: 'Strong & Narrative (Neural)' },
   { id: 'Puck', name: 'Puck', gender: 'MALE', desc: 'Energetic & Youthful (Neural)' },
-  { id: 'my-MM-ThihaNeural', name: 'Thiha', gender: 'MALE', desc: 'Natural Burmese Male (Edge)' },
+  { id: 'my-MM-ThihaNeural', name: 'Thiha', gender: 'MALE', desc: 'Microsoft Burmese Male' },
 ];
 
 const FEMALE_VOICES: AICharacter[] = [
   { id: 'Kore', name: 'Kore', gender: 'FEMALE', desc: 'Professional & Authoritative (Neural)' },
   { id: 'Zephyr', name: 'Zephyr', gender: 'FEMALE', desc: 'Bright & Friendly (Neural)' },
-  { id: 'my-MM-NilarNeural', name: 'Nilar', gender: 'FEMALE', desc: 'Natural Burmese Female (Edge)' },
+  { id: 'my-MM-NilarNeural', name: 'Nilar', gender: 'FEMALE', desc: 'Microsoft Burmese Female' },
 ];
 
 interface CharacterCardProps {
@@ -149,14 +149,14 @@ const VoiceStudio: React.FC<VoiceStudioProps> = ({ onRequireCredits }) => {
   const playTestAudioRef = useRef<HTMLAudioElement | null>(null);
 
   const getVoiceDisplayName = (id: string) => {
-    if (id === 'my-MM-ThihaNeural') return 'Thiha (Edge)';
-    if (id === 'my-MM-NilarNeural') return 'Nilar (Edge)';
+    if (id === 'my-MM-ThihaNeural') return 'Thiha (Microsoft)';
+    if (id === 'my-MM-NilarNeural') return 'Nilar (Microsoft)';
     return id;
   };
 
   const getVoiceHistoryName = (id: string) => {
-    if (id === 'my-MM-ThihaNeural') return 'Thiha (Male) - Edge';
-    if (id === 'my-MM-NilarNeural') return 'Nilar (Female) - Edge';
+    if (id === 'my-MM-ThihaNeural') return 'Thiha (Male) - Microsoft';
+    if (id === 'my-MM-NilarNeural') return 'Nilar (Female) - Microsoft';
     if (id === 'Charon') return 'Charon (Male) - Neural';
     if (id === 'Fenrir') return 'Fenrir (Male) - Neural';
     if (id === 'Puck') return 'Puck (Male) - Neural';
@@ -575,8 +575,12 @@ const VoiceStudio: React.FC<VoiceStudioProps> = ({ onRequireCredits }) => {
       
     } catch (err: any) {
       console.error("Voice generation failed.", err);
-      setToastMessage(`Neural synthesis failed: ${err.message}. Falling back to system voice.`);
-      setEngine(VoiceEngine.SYSTEM);
+      const isMicrosoftVoice = voiceToUse.endsWith('Neural') && voiceToUse.includes('-');
+      setToastMessage(
+        isMicrosoftVoice
+          ? `Microsoft ${getVoiceHistoryName(voiceToUse)} voice failed: ${err.message}. No substitute voice was used.`
+          : `Neural synthesis failed: ${err.message}`,
+      );
     } finally {
       setIsGenerating(false);
     }

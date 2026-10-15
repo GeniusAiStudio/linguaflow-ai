@@ -15,8 +15,6 @@ import { fileURLToPath } from "url";
 import YtDlpWrapModule from "yt-dlp-wrap";
 import { GoogleGenAI, Modality } from "@google/genai";
 import { geminiService } from "./services/geminiService";
-import { WebSocket } from "ws";
-import crypto from "node:crypto";
 
 export function getValidGeminiApiKey(): string {
   const geminiKey = process.env.GEMINI_API_KEY;
@@ -37,167 +35,93 @@ export function getValidGeminiApiKey(): string {
   return geminiKey || myKey || "";
 }
 
-function calculateGecToken(offsetMs: number = 0): string {
-  const TRUSTED_CLIENT_TOKEN = "6A5AA1D4EAFF4E9FB37E23D68491D6F4";
-  const unixEpoch = Math.floor((Date.now() + offsetMs) / 1000);
-  let ticks = (BigInt(unixEpoch) + 11644473600n) * 10000000n;
-  ticks = ticks - (ticks % 3000000000n);
-  const inputStr = ticks.toString() + TRUSTED_CLIENT_TOKEN;
-  return crypto.createHash("sha256").update(inputStr).digest("hex").toUpperCase();
+const MICROSOFT_VOICE_ALIASES: Record<string, string> = {
+  Nilar: "my-MM-NilarNeural",
+  "Nilar (Female)": "my-MM-NilarNeural",
+  Thiha: "my-MM-ThihaNeural",
+  "Thiha (Male)": "my-MM-ThihaNeural",
+};
+
+function normalizeMicrosoftVoice(voice?: string): string {
+  const requestedVoice = (voice || "my-MM-NilarNeural").trim();
+  return MICROSOFT_VOICE_ALIASES[requestedVoice] || requestedVoice;
 }
 
-function edgeTtsWithOffset(text: string, offsetMs: number, options: { voice?: string } = {}): Promise<Buffer> {
-  const voice = options.voice || "my-MM-NilarNeural";
-  const TRUSTED_CLIENT_TOKEN = "6A5AA1D4EAFF4E9FB37E23D68491D6F4";
-  const baseUrl = "speech.platform.bing.com/consumer/speech/synthesize/readaloud";
-  const webSocketURL = `wss://${baseUrl}/edge/v1?TrustedClientToken=${TRUSTED_CLIENT_TOKEN}`;
-  
-  const uuid = () => crypto.randomUUID().replace(/-/g, "");
-  const connectionId = uuid();
-  const gec = calculateGecToken(offsetMs);
-  const muid = crypto.randomBytes(16).toString("hex").toUpperCase();
-  const CHROMIUM_FULL_VERSION = "143.0.3650.75";
-  const CHROMIUM_MAJOR_VERSION = "143";
-  const fullUrl = `${webSocketURL}&ConnectionId=${connectionId}&Sec-MS-GEC=${gec}&Sec-MS-GEC-Version=1-${CHROMIUM_FULL_VERSION}`;
-
-  return new Promise<Buffer>((resolve, reject) => {
-    let ws: WebSocket;
-    try {
-      ws = new WebSocket(fullUrl, {
-        host: "speech.platform.bing.com",
-        origin: "chrome-extension://jdiccldimpdaibmpdkjnbmckianbfold",
-        headers: {
-          "User-Agent": `Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/${CHROMIUM_MAJOR_VERSION}.0.0.0 Safari/537.36 Edg/${CHROMIUM_MAJOR_VERSION}.0.0.0`,
-          "Accept-Encoding": "gzip, deflate, br, zstd",
-          "Accept-Language": "en-US,en;q=0.9",
-          "Pragma": "no-cache",
-          "Cache-Control": "no-cache",
-          "Sec-WebSocket-Version": "13",
-          "Cookie": `muid=${muid};`
-        },
-      });
-    } catch (wsErr) {
-      return reject(wsErr);
-    }
-
-    const audioData: Buffer[] = [];
-    let isFinished = false;
-
-    const timeoutId = setTimeout(() => {
-      if (!isFinished) {
-        isFinished = true;
-        try {
-          ws.close();
-        } catch (e) {}
-        reject(new Error("Edge TTS synthesis timed out after 25 seconds."));
-      }
-    }, 25000);
-
-    ws.on("message", (rawData, isBinary) => {
-      if (isFinished) return;
-
-      if (!isBinary) {
-        const data = rawData.toString("utf8");
-        if (data.includes("turn.end")) {
-          isFinished = true;
-          clearTimeout(timeoutId);
-          resolve(Buffer.concat(audioData));
-          try {
-            ws.close();
-          } catch (e) {}
-        }
-        return;
-      }
-      const data = rawData as Buffer;
-      const separator = "Path:audio\r\n";
-      const index = data.indexOf(separator);
-      if (index !== -1) {
-        const content = data.subarray(index + separator.length);
-        audioData.push(content);
-      }
-    });
-
-    ws.on("error", (err) => {
-      if (isFinished) return;
-      isFinished = true;
-      clearTimeout(timeoutId);
-      reject(err);
-    });
-
-    ws.on("close", () => {
-      if (!isFinished) {
-        isFinished = true;
-        clearTimeout(timeoutId);
-        if (audioData.length > 0) {
-          resolve(Buffer.concat(audioData));
-        } else {
-          reject(new Error("Edge TTS connection closed prematurely without producing audio."));
-        }
-      }
-    });
-
-    const speechConfig = JSON.stringify({
-      context: {
-        synthesis: {
-          audio: {
-            metadataoptions: { sentenceBoundaryEnabled: false, wordBoundaryEnabled: false },
-            outputFormat: "audio-24khz-48kbitrate-mono-mp3",
-          }
-        }
-      }
-    });
-
-    const configMessage = `X-Timestamp:${Date()}\r\nContent-Type:application/json; charset=utf-8\r\nPath:speech.config\r\n\r\n${speechConfig}`;
-
-    ws.on("open", () => {
-      ws.send(configMessage, { compress: true }, (configError) => {
-        if (configError) {
-          if (isFinished) return;
-          isFinished = true;
-          clearTimeout(timeoutId);
-          reject(configError);
-          try {
-            ws.close();
-          } catch (e) {}
-          return;
-        }
-
-        const lang = voice.split("-").slice(0, 2).join("-") || "en-US";
-        const ssmlMessage = `X-RequestId:${uuid()}\r\nContent-Type:application/ssml+xml\r\n`
-          + `X-Timestamp:${Date()}Z\r\nPath:ssml\r\n\r\n`
-          + `<speak version='1.0' xmlns='http://www.w3.org/2001/10/synthesis' xml:lang='${lang}'>`
-          + `<voice name='${voice}'><prosody pitch='+0Hz' rate='+0%' volume='+0%'>`
-          + `${text}</prosody></voice></speak>`;
-
-        ws.send(ssmlMessage, { compress: true }, (ssmlError) => {
-          if (ssmlError) {
-            if (isFinished) return;
-            isFinished = true;
-            clearTimeout(timeoutId);
-            reject(ssmlError);
-            try {
-              ws.close();
-            } catch (e) {}
-          }
-        });
-      });
-    });
-  });
+function isMicrosoftNeuralVoice(voice: string): boolean {
+  return /^[a-z]{2,3}-[A-Z]{2}-.+Neural$/.test(normalizeMicrosoftVoice(voice));
 }
 
-async function edgeTts(text: string, options: { voice?: string } = {}): Promise<Buffer> {
-  const offsets = [0, -300000, 300000, -600000, 600000];
-  let lastError: any = null;
+function escapeXml(value: string): string {
+  return value
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&apos;");
+}
 
-  for (const offset of offsets) {
-    try {
-      return await edgeTtsWithOffset(text, offset, options);
-    } catch (err: any) {
-      lastError = err;
-      console.warn(`[Edge TTS] Synthesis failed with time offset ${offset}ms: ${err.message}. Retrying next bucket...`);
-    }
+function getAzureSpeechConfig(): { key: string; endpoint: string } | null {
+  const key = process.env.AZURE_SPEECH_KEY || process.env.SPEECH_KEY || "";
+  const region = process.env.AZURE_SPEECH_REGION || process.env.SPEECH_REGION || "";
+  const configuredEndpoint = process.env.AZURE_SPEECH_ENDPOINT || "";
+
+  if (!key || (!region && !configuredEndpoint)) return null;
+
+  const baseEndpoint = configuredEndpoint
+    ? configuredEndpoint.replace(/\/$/, "")
+    : `https://${region}.tts.speech.microsoft.com`;
+  const endpoint = baseEndpoint.endsWith("/cognitiveservices/v1")
+    ? baseEndpoint
+    : `${baseEndpoint}/cognitiveservices/v1`;
+
+  return { key, endpoint };
+}
+
+async function microsoftTts(
+  text: string,
+  options: { voice?: string } = {},
+): Promise<Buffer> {
+  const config = getAzureSpeechConfig();
+  if (!config) {
+    throw new Error(
+      "Microsoft Speech is not configured. Set AZURE_SPEECH_KEY and AZURE_SPEECH_REGION on the server.",
+    );
   }
-  throw lastError || new Error("Edge TTS failed after trying all clock sync offsets.");
+
+  const voice = normalizeMicrosoftVoice(options.voice);
+  if (!isMicrosoftNeuralVoice(voice)) {
+    throw new Error(`Invalid Microsoft neural voice ID: ${voice}`);
+  }
+
+  const language = voice.split("-").slice(0, 2).join("-");
+  const ssml =
+    `<speak version="1.0" xmlns="http://www.w3.org/2001/10/synthesis" xml:lang="${escapeXml(language)}">` +
+    `<voice name="${escapeXml(voice)}">${escapeXml(text)}</voice>` +
+    `</speak>`;
+
+  const response = await fetch(config.endpoint, {
+    method: "POST",
+    headers: {
+      "Ocp-Apim-Subscription-Key": config.key,
+      "Content-Type": "application/ssml+xml; charset=utf-8",
+      "X-Microsoft-OutputFormat": "audio-24khz-48kbitrate-mono-mp3",
+      "User-Agent": "LinguaFlowAI",
+    },
+    body: ssml,
+  });
+
+  if (!response.ok) {
+    const details = (await response.text()).trim();
+    throw new Error(
+      `Microsoft Speech returned ${response.status}${details ? `: ${details.slice(0, 300)}` : ""}`,
+    );
+  }
+
+  const audio = Buffer.from(await response.arrayBuffer());
+  if (audio.length === 0) {
+    throw new Error(`Microsoft Speech returned empty audio for ${voice}.`);
+  }
+  return audio;
 }
 
 const YtDlpWrap = (YtDlpWrapModule as any).default || YtDlpWrapModule;
@@ -1115,7 +1039,7 @@ async function startServer() {
     res.setHeader("Access-Control-Allow-Origin", "*");
     res.setHeader("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS, HEAD");
     res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization, Range, Accept");
-    res.setHeader("Access-Control-Expose-Headers", "Content-Range, Content-Length, Accept-Ranges");
+    res.setHeader("Access-Control-Expose-Headers", "Content-Range, Content-Length, Accept-Ranges, X-TTS-Provider, X-TTS-Voice");
     if (req.method === "OPTIONS") {
       res.sendStatus(200);
       return;
@@ -1139,6 +1063,7 @@ async function startServer() {
       ffmpegPath: ffmpegInstaller.path,
       ffmpegExists: fs.existsSync(ffmpegInstaller.path),
       ytDlpExists: fs.existsSync(ytDlpBinaryPath),
+      microsoftSpeechConfigured: Boolean(getAzureSpeechConfig()),
     });
   });
 
@@ -1149,13 +1074,13 @@ async function startServer() {
         return res.status(400).json({ error: "Missing or invalid text" });
       }
 
-      const voiceStr = (voice as string) || "my-MM-NilarNeural";
-      const isEdgeVoice = voiceStr.includes("Neural") || voiceStr.startsWith("my-MM-") || voiceStr.startsWith("en-US-") || voiceStr.includes("-");
+      const voiceStr = normalizeMicrosoftVoice(voice as string | undefined);
+      const isMicrosoftVoice = isMicrosoftNeuralVoice(voiceStr);
       
       let audioBuffer;
       
-      if (isEdgeVoice) {
-        audioBuffer = await edgeTts(text, { voice: voiceStr });
+      if (isMicrosoftVoice) {
+        audioBuffer = await microsoftTts(text, { voice: voiceStr });
       } else {
         const myApiKey = getValidGeminiApiKey();
         if (!myApiKey) throw new Error("GEMINI_API_KEY missing");
@@ -1182,10 +1107,13 @@ async function startServer() {
       }
       
       res.setHeader("Content-Type", "audio/mpeg");
+      res.setHeader("X-TTS-Provider", isMicrosoftVoice ? "Microsoft-Azure-Speech" : "Google-Gemini");
+      res.setHeader("X-TTS-Voice", voiceStr);
       res.send(audioBuffer);
     } catch (err: any) {
       console.error("TTS GET error:", err);
-      res.status(500).json({ error: err.message });
+      const status = err.message?.includes("not configured") ? 503 : 500;
+      res.status(status).json({ error: err.message });
     }
   });
 
@@ -1196,13 +1124,13 @@ async function startServer() {
         return res.status(400).json({ error: "Missing or invalid text" });
       }
 
-      const voiceStr = (voice as string) || "my-MM-NilarNeural";
-      const isEdgeVoice = voiceStr.includes("Neural") || voiceStr.startsWith("my-MM-") || voiceStr.startsWith("en-US-") || voiceStr.includes("-");
+      const voiceStr = normalizeMicrosoftVoice(voice as string | undefined);
+      const isMicrosoftVoice = isMicrosoftNeuralVoice(voiceStr);
       
       let audioBuffer;
       
-      if (isEdgeVoice) {
-        audioBuffer = await edgeTts(text, { voice: voiceStr });
+      if (isMicrosoftVoice) {
+        audioBuffer = await microsoftTts(text, { voice: voiceStr });
       } else {
         const myApiKey = getValidGeminiApiKey();
         if (!myApiKey) throw new Error("GEMINI_API_KEY missing");
@@ -1229,10 +1157,13 @@ async function startServer() {
       }
       
       res.setHeader("Content-Type", "audio/mpeg");
+      res.setHeader("X-TTS-Provider", isMicrosoftVoice ? "Microsoft-Azure-Speech" : "Google-Gemini");
+      res.setHeader("X-TTS-Voice", voiceStr);
       res.send(audioBuffer);
     } catch (err: any) {
       console.error("TTS POST error:", err);
-      res.status(500).json({ error: err.message });
+      const status = err.message?.includes("not configured") ? 503 : 500;
+      res.status(status).json({ error: err.message });
     }
   });
 
@@ -2223,14 +2154,23 @@ async function startServer() {
     async (req, res) => {
       const { videoUrl, audioUrl, sceneImageUrls, script, voice, aspectRatio, idToken, altStyle, blurEnabled, freezeEnabled, freezeInterval, freezeDuration, zoomPower, blurY, blurHeight, blurStrength, blurMode, blurX, blurWidth, subtitleSize, subtitleY, subtitleStyle, subtitleColor, subtitleHighlightColor, subtitleOutlineColor, subtitleMode, subtitleSegments } = req.body;
       const scriptText = script || "";
-      const voiceName = voice || "Kore";
+      const requestedVoiceName = voice || "Kore";
+      const voiceName = isMicrosoftNeuralVoice(requestedVoiceName)
+        ? normalizeMicrosoftVoice(requestedVoiceName)
+        : requestedVoiceName;
       const targetRatioStr = aspectRatio || "9:16";
 
       console.log("[Pipeline Info] Reached finalize-recap endpoint with JSON payload.");
 
       // Early Key Check: If selecting a voice that requires Gemini and key is missing, fail immediately
-      const isEdgeVoice = voiceName.includes("Neural");
-      if (!isEdgeVoice && !(getValidGeminiApiKey())) {
+      const isMicrosoftVoice = isMicrosoftNeuralVoice(voiceName);
+      if (isMicrosoftVoice && !getAzureSpeechConfig()) {
+        console.error("[Pipeline Error] Microsoft Speech credentials are missing for the selected voice.");
+        return res.status(503).json({
+          error: "Microsoft Speech is not configured. Set AZURE_SPEECH_KEY and AZURE_SPEECH_REGION on the server. No substitute voice was used."
+        });
+      }
+      if (!isMicrosoftVoice && !(getValidGeminiApiKey())) {
         console.error("[Pipeline Error] GEMINI_API_KEY environment variable is missing for the selected voice.");
         return res.status(400).json({
           error: "MANDATORY_GEMINI_API_KEY_MISSING: The required MY_GEMINI_API_KEY or GEMINI_API_KEY environment variable is missing. Fallbacks are disabled. Please select a Burmese neural voice starting with 'my-MM-' or specify GEMINI_API_KEY in the environment."
@@ -2423,15 +2363,18 @@ async function startServer() {
                 ttsWavPath = path.join(os.tmpdir(), `tts-${Date.now()}.wav`);
                 filesToCleanup.push(ttsWavPath);
                 
-                if (isEdgeVoice) {
-                  addLog(`Stage 3: Calling Edge TTS microservice...`);
+                if (isMicrosoftVoice) {
+                  addLog(`Stage 3: Calling Microsoft Azure Speech...`);
                   await callGeminiWithRetry(async () => {
                     const edgeRes = await fetch(`http://127.0.0.1:${PORT}/api/edge-tts`, {
                       method: "POST",
                       headers: { "Content-Type": "application/json" },
                       body: JSON.stringify({ text: cleanedText, voice: voiceName })
                     });
-                    if (!edgeRes.ok) throw new Error("Edge TTS failed with status " + edgeRes.status);
+                    if (!edgeRes.ok) {
+                      const errorBody = await edgeRes.json().catch(() => ({})) as { error?: string };
+                      throw new Error(errorBody.error || `Microsoft Speech failed with status ${edgeRes.status}`);
+                    }
                     fs.writeFileSync(ttsWavPath, Buffer.from(await edgeRes.arrayBuffer()));
                   }, 4, 3000);
                 } else {
@@ -2478,6 +2421,9 @@ async function startServer() {
               }
             } catch (ttsErr: any) {
               addLog(`Stage 3 Error: TTS synthesis failed (${ttsErr.message}).`);
+              if (isMicrosoftVoice) {
+                throw new Error(`Microsoft ${voiceName} synthesis failed: ${ttsErr.message}. No substitute voice was used.`);
+              }
               if (uploadedAudioPath) narrationAudioPath = uploadedAudioPath;
               else if (extractedAudioPath) narrationAudioPath = extractedAudioPath;
             }

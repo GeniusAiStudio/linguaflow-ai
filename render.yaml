@@ -15,6 +15,11 @@ services:
         value: production
       - key: GEMINI_API_KEY
         sync: false
+      # Required for Microsoft Nilar/Thiha voice generation:
+      - key: AZURE_SPEECH_KEY
+        sync: false
+      - key: AZURE_SPEECH_REGION
+        sync: false
       # Optional fallback key (leave empty if unused):
       # - key: MY_GEMINI_API_KEY
       #   sync: false

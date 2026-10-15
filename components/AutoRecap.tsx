@@ -204,7 +204,7 @@ const AutoRecap: React.FC<AutoRecapProps> = ({ onBack, onRequireCredits }) => {
     }
   };
 
-  const handlePreviewVoice = (v: VoiceOption) => {
+  const handlePreviewVoice = async (v: VoiceOption) => {
     if (previewingVoiceId === v.id) {
       if (activeAudioRef.current) {
         activeAudioRef.current.pause();
@@ -218,29 +218,52 @@ const AutoRecap: React.FC<AutoRecapProps> = ({ onBack, onRequireCredits }) => {
     }
 
     setPreviewLoadingId(v.id);
+    setError(null);
     const previewUrl = `/api/edge-tts?voice=${encodeURIComponent(v.voiceKey)}&text=${encodeURIComponent(v.sampleText)}`;
-    const audio = new Audio(previewUrl);
-    activeAudioRef.current = audio;
+    try {
+      const response = await fetch(previewUrl);
+      if (!response.ok) {
+        const errorBody = await response.json().catch(() => ({})) as { error?: string };
+        throw new Error(errorBody.error || `Voice preview failed with status ${response.status}`);
+      }
 
-    audio.oncanplaythrough = () => {
-      setPreviewLoadingId(null);
-      setPreviewingVoiceId(v.id);
-      audio.play().catch((err) => {
-        console.warn("Playback prevented or failed", err);
+      const provider = response.headers.get("X-TTS-Provider");
+      const generatedVoice = response.headers.get("X-TTS-Voice");
+      if (v.voiceKey.endsWith("Neural") &&
+          (provider !== "Microsoft-Azure-Speech" || generatedVoice !== v.voiceKey)) {
+        throw new Error(`Microsoft voice verification failed for ${v.name}.`);
+      }
+
+      const audioUrl = URL.createObjectURL(await response.blob());
+      const audio = new Audio(audioUrl);
+      activeAudioRef.current = audio;
+
+      audio.oncanplaythrough = () => {
+        setPreviewLoadingId(null);
+        setPreviewingVoiceId(v.id);
+        audio.play().catch((err) => {
+          console.warn("Playback prevented or failed", err);
+          setPreviewingVoiceId(null);
+        });
+      };
+
+      audio.onended = () => {
         setPreviewingVoiceId(null);
-      });
-    };
+        URL.revokeObjectURL(audioUrl);
+      };
 
-    audio.onended = () => {
-      setPreviewingVoiceId(null);
-    };
+      audio.onerror = () => {
+        setPreviewLoadingId(null);
+        setPreviewingVoiceId(null);
+        URL.revokeObjectURL(audioUrl);
+      };
 
-    audio.onerror = () => {
+      audio.load();
+    } catch (previewError: any) {
       setPreviewLoadingId(null);
       setPreviewingVoiceId(null);
-    };
-
-    audio.load();
+      setError(previewError.message || "Voice preview failed.");
+    }
   };
 
   React.useEffect(() => {
